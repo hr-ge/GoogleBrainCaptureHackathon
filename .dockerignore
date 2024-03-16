@@ -1,0 +1,38 @@
+# Ignore version control directories
+.git/
+.gitignore
+.svn/
+.cvsignore
+
+# Ignore build and test directories
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+/build/
+/dist/
+*.egg-info/
+.cache
+/test/
+coverage/
+*.log
+
+# Ignore development tools
+/node_modules/
+/npm-debug.log
+/yarn-error.log
+/.env
+/.env.local
+/.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore Dockerfile and docker-compose files to prevent them from being added to the context
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Additional files and directories to ignore
+tmp/
+temp/
