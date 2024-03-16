@@ -33,6 +33,45 @@ Dockerfile
 docker-compose.yml
 .dockerignore
 
+# Ignore specific jupyter notebook files
+braincapture_data_loader.ipynb
+fbcs_net.ipynb
+generate_latent_representations.ipynb
+pipeline.ipynb
+
+# Ignore CUDA installation run file
+cuda_12.2.1_535.86.10_linux.run
+
+# Ignore specific images
+distr_fbcs_net.png
+distr_logreg.png
+distr_mlp.png
+
+# Ignore PyTorch model file
+encoder.pt
+
+# Ignore NumPy data files
+finetuned_latent_representations_labeled.npz
+finetuned_latent_representations_unlabeled.npz
+finetuned_latent_representations.npz
+latent_representations_unlabeled.npz
+latent_representations.npz
+
+# Ignore markdown files
+gcp_deployment.md
+README.md
+
+tuh_conformer.ipynb
+tuh_data_loader.ipynb
+Untitled.ipynb
+x_bc_data_labeled.pt
+x_bc_data_unlabeled.pt
+x_bc_data.pt
+x_tuh_data.pt
+y_bc_data_labeled.pt
+y_bc_data.pt
+y_tuh_data.pt
+
 # Additional files and directories to ignore
 tmp/
 temp/
