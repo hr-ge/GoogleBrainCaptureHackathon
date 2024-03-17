@@ -1,18 +1,19 @@
 # app.py
 import streamlit as st
-import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.ticker
+import matplotlib.patches as mpatches
+import datetime
 import sys
 import os
 sys.path.append(os.getcwd() + '/')
 from src.data.utils.eeg import get_raw
 from src.data.processing import load_data_dict, get_data, normalize_and_add_scaling_channel
 from src.data.conf.eeg_annotations import braincapture_annotations
-from src.data.conf.eeg_channel_picks import hackathon
-from src.data.conf.eeg_channel_order import standard_19_channel
-from src.data.conf.eeg_annotations import braincapture_annotations, tuh_eeg_artefact_annotations
-from sklearn import datasets
 from braindecode.classifier import EEGClassifier
 import mne
+import tempfile
 
 max_length = lambda raw : int(raw.n_times / raw.info['sfreq']) 
 DURATION = 60
@@ -87,17 +88,30 @@ def get_file_paths(edf_file_buffers):
 
     return temp_dir + '/', paths
 
-def get_raw_data(path):
-    raw = get_raw(path)
-    raw_norm = normalize_and_add_scaling_channel(raw)
-    return raw_norm
+def process_data(data_folder_path):
+    # Using the imported load_data_dict and get_data functions
+    data_dict = load_data_dict(data_folder_path=data_folder_path, annotation_dict=braincapture_annotations, tmin=-0.5, tlen=6, labels=True)
+    all_subjects = list(data_dict.keys())
+    X, _ = get_data(data_dict, all_subjects)
+    return X
 
-def get_annotations(raw_norm, model):
-    info = mne.create_info(ch_names=20, sfreq=256, ch_types='eeg')
-    epochs = mne.EpochsArray(raw_norm, info=info)
-    probs = np.array(model.predict_proba(epochs))  
+def get_annotations(X, model):
+    """
+    Get predicted annotations from the model
 
-    annotations = probs.argmax(axis=-1)
+    Args:
+        X (np.array): The EEG data
+        model (braindecode.classifier.EEGClassifier): The model
+
+    Returns:
+        annotations (np.array): The predicted annotations
+    """
+    ch_names = ['Fp1', 'Fp2', 'F7', 'F3', 'Fz', 'F4', 'F8', 'T7', 'C3', 'Cz', 'C4', 'T8', 'P7', 'P3', 'Pz', 'P4', 'P8', 'O1', 'O2', 'Norm']
+    info = mne.create_info(ch_names=ch_names, sfreq=256, ch_types='eeg')
+    epochs = mne.EpochsArray(X, info=info)
+    probs = np.array(model.predict(epochs))  
+
+    annotations = probs
     return annotations
 
 def plot_dscnn_annotations(annotations):
@@ -134,7 +148,7 @@ def plot_dscnn_annotations(annotations):
     ax[0].legend(handles=patches, bbox_to_anchor=(1.05, 1.0), loc='upper left', fontsize=24)
     ax[1].set_yticklabels([])
     plt.suptitle('Predicted Artifacts Labels', size=32)
-    plt.show()
+    st.pyplot(fig)
 
 
 st.title("EEG Data Visualization and Annotation")
@@ -162,7 +176,8 @@ if uploaded_files:
     # Load and display model annotations
     model_loaded = load_model()
     if st.button("Display Model Annotations"):
-        raw_norm = get_raw_data(file_to_visualize)
+        raw_norm = process_data(temp_dir)
         annotations = get_annotations(raw_norm, model_loaded)
+        print(annotations)
         plot_dscnn_annotations(annotations)
     
