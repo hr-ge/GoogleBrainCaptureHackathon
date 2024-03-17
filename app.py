@@ -5,70 +5,58 @@ import sys
 import os
 sys.path.append(os.getcwd() + '/')
 from src.data.utils.eeg import get_raw
-from src.data.processing import load_data_dict, get_data
+from src.data.processing import load_data_dict, get_data, normalize_and_add_scaling_channel
 from src.data.conf.eeg_annotations import braincapture_annotations
 from src.data.conf.eeg_channel_picks import hackathon
 from src.data.conf.eeg_channel_order import standard_19_channel
 from src.data.conf.eeg_annotations import braincapture_annotations, tuh_eeg_artefact_annotations
 from sklearn import datasets
-from sklearn.model_selection import train_test_split
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score, balanced_accuracy_score
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-import matplotlib.pyplot as plt
-import numpy as np
-from PIL import Image
-import tempfile
-import torch
-from tqdm import tqdm
-from copy import deepcopy
-from model.model import BendrEncoder
-from model.model import Flatten
-from sklearn.cluster import KMeans
-from src.visualisation.visualisation import plot_latent_pca
+from braindecode.classifier import EEGClassifier
+import mne
 
 max_length = lambda raw : int(raw.n_times / raw.info['sfreq']) 
 DURATION = 60
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = 'cpu'
 
-def generate_latent_representations(data, encoder, batch_size=5, device='cpu'):
-    """ Generate latent representations for the given data using the given encoder.
-    Args:
-        data (np.ndarray): The data to be encoded.
-        encoder (nn.Module): The encoder to be used.
-        batch_size (int): The batch size to be used.
-    Returns:
-        np.ndarray: The latent representations of the given data.
-    """
-    data = data.to(device)
-
-    latent_size = (1536, 4) # do not change this 
-    latent = np.empty((data.shape[0], *latent_size))
+class viz_raw():
+    def __init__(self, path):
+        self.raw = mne.io.read_raw(path, preload=True)
 
 
-    for i in tqdm(range(0, data.shape[0], batch_size)):
-        latent[i:i+batch_size] = encoder(data[i:i+batch_size]).cpu().detach().numpy()
+    def plot_raw(self):
+        return self.raw.plot()
+    
+    
+    def epoch_viz(self):
+        events, event_id = mne.events_from_annotations(self.raw)
+        epochs = mne.Epochs(self.raw, events, event_id, tmin=-0.3, tmax=0.7, preload=True)
+        return epochs.plot()
 
-    return latent.reshape((latent.shape[0], -1))
 
 def load_model(device='cpu'):
-    """Loading BendrEncoder model
+    """Loading ShallowFBCSPNet model
     Args:
         device (str): The device to be used.
     Returns:
-        BendrEncoder (nn.Module): The model
+        ShallowFBCSPNet (braindecode.classifier.EEGClassifier): The model
     """
 
     # Initialize the model
-    encoder = BendrEncoder()
+    model = EEGClassifier(
+    'ShallowFBCSPNet',
+    module__final_conv_length='auto',
+    module__n_times=1537,
+    module__n_chans=20,
+    module__n_outputs=5,
+    device = "cpu",
+)
 
-    # Load the pretrained model
-    encoder.load_state_dict(deepcopy(torch.load("encoder.pt", map_location=device)))
-    encoder = encoder.to(device)
+    # Initialize it with the parameters of the best checkpoint:
+    model.initialize()
+    model.load_params('checkpoint/params.pt')
 
-    return encoder
+    return model
 
 def make_dir(dir):
     try:
@@ -99,68 +87,82 @@ def get_file_paths(edf_file_buffers):
 
     return temp_dir + '/', paths
 
-def plot_clusters(components, labels):
-    """
-    input: 
-        components: 2D array of the principal components
-        labels: labels of the clusters
+def get_raw_data(path):
+    raw = get_raw(path)
+    raw_norm = normalize_and_add_scaling_channel(raw)
+    return raw_norm
+
+def get_annotations(raw_norm, model):
+    info = mne.create_info(ch_names=20, sfreq=256, ch_types='eeg')
+    epochs = mne.EpochsArray(raw_norm, info=info)
+    probs = np.array(model.predict_proba(epochs))  
+
+    annotations = probs.argmax(axis=-1)
+    return annotations
+
+def plot_dscnn_annotations(annotations):
+    label_dict = {'Eye blinking': 0, 'Eye movement left-right': 1, 'Eyes closed': 2, 'Eyes opened': 3, 'Jaw clenching': 4}
+    color_dict = {
+        0: np.array([255, 255, 0]),  # yellow
+        1: np.array([255, 0, 0]),  # red
+        2: np.array([50, 205, 50]),  # lime
+        3: np.array([255, 160, 0]),  # orange
+        4: np.array([100, 149, 237]),  # cornflowerblue
+    }
+    names = list(label_dict.keys())
+    colors = ['yellow', 'red', 'lime', 'orange', 'cornflowerblue']
     
-    output: None"""
+    annotations_RGB = np.array([color_dict[label] for label in annotations])
+    x = np.linspace(0, len(annotations), len(annotations))
+    colorsx = [colors[int(item)] for item in annotations]
 
-    # Plot clusters
-    fig, ax = plt.subplots(figsize=(8, 6))
-    unique_labels = np.unique(labels)
-    for cluster_label in unique_labels:
-        ax.scatter(components[labels == cluster_label, 0], components[labels == cluster_label, 1], label=f'Cluster {cluster_label}')
+    fig, ax = plt.subplots(2, 1, figsize=(30, 8))
+    ax[0].scatter(x, annotations, c=colorsx, s=100)
+    ax[0].set_yticks([0, 1, 2, 3, 4])
+    ax[0].set_yticklabels(names, fontsize=24)
+    ax[0].set_xlim(0, len(annotations))
 
-    ax.set_title('Clusters using PCA')
-    ax.set_xlabel('Principal Component 0')
-    ax.set_ylabel('Principal Component 1')
-    ax.legend()
-
-    st.pyplot(fig)
-
-def main():
-    st.title('Demonstration of EEG data pipeline')
-    st.write("""
-             This is a simple app for visualising and analysing EEG data. Start by uploading the .EDF files you want to analyse.
-             """)
+    ax[1].imshow(np.expand_dims(annotations_RGB, axis=0), interpolation='nearest', aspect='auto')
+    formatter = matplotlib.ticker.FuncFormatter(lambda pos, _: str(datetime.timedelta(seconds=int(pos * 2))))
     
-    # 1: Upload EDF files
-    edf_file_buffers = st.file_uploader('Upload .EDF files', type='edf', accept_multiple_files=True)
+    for i in range(2):
+        ax[i].set_xticks(np.linspace(0, len(annotations), 10, dtype=float))
+        ax[i].xaxis.set_major_formatter(formatter)
+        ax[i].tick_params(axis='x', labelsize=20)
+
+    patches = [mpatches.Patch(color=color, label=name) for color, name in zip(colors, names)]
+    ax[0].legend(handles=patches, bbox_to_anchor=(1.05, 1.0), loc='upper left', fontsize=24)
+    ax[1].set_yticklabels([])
+    plt.suptitle('Predicted Artifacts Labels', size=32)
+    plt.show()
+
+
+st.title("EEG Data Visualization and Annotation")
+
+# File uploader
+st.subheader("Upload your EEG data files")
+uploaded_files = st.file_uploader("Choose a file...", accept_multiple_files=True)
+
+if uploaded_files:
+    temp_dir, paths = get_file_paths(uploaded_files)
+    st.success(f"Files uploaded to {temp_dir}")
     
+    # Select a file to visualize
+    file_to_visualize = st.selectbox("Select a file to visualize", options=paths)
 
-    if edf_file_buffers:
-        data_folder, file_paths = get_file_paths(edf_file_buffers)
-        
-        
-        if st.button("Process data"):
-            st.write("Data processing initiated")
-          
-            # 2: Chop the .edf data into 5 second windows
-            data_dict = load_data_dict(data_folder_path=data_folder, annotation_dict=braincapture_annotations, tlen=5, labels=False)
-            all_subjects = list(data_dict.keys())
-            X = get_data(data_dict, all_subjects)
+    # Visualization section
+    if st.button("Visualize Raw Data"):
+        viz = viz_raw(file_to_visualize)
+        st.pyplot(viz.plot_raw())
+    
+    if st.button("Visualize Epochs"):
+        viz = viz_raw(file_to_visualize)
+        st.pyplot(viz.epoch_viz())
 
-            # 3: Load the model and generate latent representations
-            encoder = load_model(device)   
-            latent_representations = generate_latent_representations(X, encoder, device=device)
-
-            # 4: Perform KMeans clustering on the latent representations
-            st.write("Running K-means with n=5 clusters")
-            kmeans = KMeans(n_clusters=5, random_state=42)
-            kmeans.fit(latent_representations)
-            labels = kmeans.labels_
-
-            # 5: Visualize the clusters using PCA 
-            st.write("Visualising clusters using PCA")  
-            # Apply PCA
-            pca = PCA(n_components=2)
-            components = pca.fit_transform(latent_representations)
-
-            # Plot clusters
-            plot_clusters(components, labels)
-
-
-
-main()
+    # Load and display model annotations
+    model_loaded = load_model()
+    if st.button("Display Model Annotations"):
+        raw_norm = get_raw_data(file_to_visualize)
+        annotations = get_annotations(raw_norm, model_loaded)
+        plot_dscnn_annotations(annotations)
+    

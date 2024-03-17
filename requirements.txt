@@ -12,3 +12,4 @@ scipy
 pyedflib
 google # try google.cloud
 streamlit
+braindecode
